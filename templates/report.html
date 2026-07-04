@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}{{ r.company_name }} vs Nifty 50 - Report{% endblock %}
+
+{% macro render_table(rows) %}
+  {% if rows %}
+  <table>
+    <thead><tr>{% for k in rows[0].keys() %}<th>{{ k }}</th>{% endfor %}</tr></thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>{% for v in row.values() %}<td>{{ v }}</td>{% endfor %}</tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+{% endmacro %}
+
+{% block content %}
+  <h1>Estimating {{ r.company_name }}'s Market Beta Against the Nifty 50</h1>
+  <p class="subtitle">A five-year daily-returns econometric case study &middot; {{ r.ticker }}</p>
+
+  <div class="actions" style="margin-bottom:24px;">
+    <a class="button" href="{{ url_for('download', report_id=report_id) }}">Download PDF report</a>
+    <a class="button secondary" href="{{ url_for('index') }}">Analyze another company</a>
+  </div>
+
+  <div class="card">
+    <p>{{ r.text.intro }}</p>
+    {{ render_table(r.tables.meta) }}
+  </div>
+
+  <div class="card">
+    <h2>Five Years of Price History</h2>
+    <img src="{{ images.prices }}" alt="Price history chart">
+    <p class="explain">{{ r.text.prices }}</p>
+    <p class="caption">Each panel uses its own y-axis; an index and a stock price are never comparable on a shared scale.</p>
+  </div>
+
+  <div class="card">
+    <h2>Cumulative Performance, Rebased to 100</h2>
+    <img src="{{ images.indexed }}" alt="Indexed performance chart">
+    <p class="explain">{{ r.text.indexed }}</p>
+  </div>
+
+  <div class="card">
+    <h2>Return Summary Statistics</h2>
+    {{ render_table(r.tables.stats) }}
+    <img src="{{ images.hist }}" alt="Return histograms" style="margin-top:16px;">
+    <p class="explain">{{ r.text.stats }}</p>
+  </div>
+
+  <div class="card">
+    <h2>The Market Model: {{ r.company_name }} Return vs. Nifty 50 Return</h2>
+    <img src="{{ images.scatter }}" alt="Scatter plot with fitted regression line">
+    <p class="explain">{{ r.text.scatter }}</p>
+  </div>
+
+  <div class="card">
+    <h2>OLS Regression Results and Hypothesis Tests</h2>
+    <p>{{ r.text.regression }}</p>
+    <p style="color:var(--ink-primary); font-weight:600; margin-bottom:2px;">Model 1 &mdash; Simple market model</p>
+    {{ render_table(r.tables.reg_simple) }}
+    <p style="color:var(--ink-primary); font-weight:600; margin:18px 0 2px;">Model 2 &mdash; Extended model with lagged Nifty return</p>
+    {{ render_table(r.tables.reg_multi) }}
+    <p class="explain">{{ r.text.hyp1 }}</p>
+    <p class="explain">{{ r.text.hyp2 }}</p>
+  </div>
+
+  <div class="card">
+    <h2>Regression Diagnostics</h2>
+    <img src="{{ images.diagnostics }}" alt="Regression diagnostic plots">
+    <p class="explain">{{ r.text.diagnostics }}</p>
+  </div>
+
+  <div class="card">
+    <h2>Heteroskedasticity-Robust Inference</h2>
+    {{ render_table(r.tables.robust) }}
+    <div style="margin-top:14px;"></div>
+    {{ render_table(r.tables.compare) }}
+    <p class="explain">{{ r.text.robust }}</p>
+  </div>
+
+  <div class="card">
+    <h2>Out-of-Sample Prediction</h2>
+    {{ render_table(r.tables.prediction) }}
+    <img src="{{ images.prediction }}" alt="Prediction chart" style="margin-top:16px;">
+    <p class="explain">{{ r.text.prediction }}</p>
+  </div>
+
+  <div class="card">
+    <h2>Conclusion</h2>
+    <p>{{ r.text.conclusion }}</p>
+  </div>
+
+  <p class="meta">Generated {{ r.generated.strftime('%d %b %Y %H:%M') }} &middot; Source: Yahoo Finance ({{ r.ticker }}, ^NSEI)</p>
+
+  <div class="actions">
+    <a class="button" href="{{ url_for('download', report_id=report_id) }}">Download PDF report</a>
+    <a class="button secondary" href="{{ url_for('index') }}">Analyze another company</a>
+  </div>
+{% endblock %}

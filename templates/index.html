@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Nifty 50 Beta Analyzer{% endblock %}
+{% block content %}
+  <h1>Indian Company vs. Nifty 50</h1>
+  <p class="subtitle">Enter any NSE-listed company. We'll pull five years of daily prices, run a market-model
+     regression against the Nifty 50, and generate a full econometric report you can read here or download as a PDF.</p>
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% endif %}
+
+  <div class="card">
+    <form action="{{ url_for('analyze') }}" method="post">
+      <label for="company"><strong style="color:var(--ink-primary)">Company name or NSE ticker</strong></label>
+      <div style="margin-top:8px;">
+        <input type="text" id="company" name="company" placeholder="e.g. Tata Motors, Infosys, HDFC Bank, UPL"
+               value="{{ query or '' }}" required autofocus>
+      </div>
+      <div class="actions">
+        <button type="submit" class="button">Generate report</button>
+      </div>
+      <p class="examples">Try: Reliance Industries · TCS · Infosys · HDFC Bank · ITC · Tata Motors · Bajaj Finance ·
+         Asian Paints · Wipro · State Bank of India</p>
+    </form>
+  </div>
+
+  <p class="meta">Data via Yahoo Finance. Fetching and running the analysis takes a few seconds - please wait
+     after clicking Generate.</p>
+{% endblock %}

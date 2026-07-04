@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Nifty 50 Beta Analyzer{% endblock %}</title>
+<style>
+  :root {
+    --surface: #fcfcfb;
+    --page: #f9f9f7;
+    --ink-primary: #0b0b0b;
+    --ink-secondary: #52514e;
+    --ink-muted: #898781;
+    --gridline: #e1e0d9;
+    --baseline: #c3c2b7;
+    --blue: #2a78d6;
+    --orange: #eb6834;
+    --row-alt: #f2f1ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface: #1a1a19;
+      --page: #0d0d0d;
+      --ink-primary: #ffffff;
+      --ink-secondary: #c3c2b7;
+      --ink-muted: #898781;
+      --gridline: #2c2c2a;
+      --baseline: #383835;
+      --blue: #3987e5;
+      --orange: #d95926;
+      --row-alt: #232322;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink-secondary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.55;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 40px 20px 80px; }
+  h1 { color: var(--ink-primary); font-size: 1.7rem; margin: 0 0 6px; }
+  h2 { color: var(--ink-primary); font-size: 1.15rem; margin: 0 0 10px; }
+  .subtitle { color: var(--ink-secondary); font-size: 1.02rem; margin: 0 0 24px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--gridline);
+    border-radius: 10px;
+    padding: 24px 28px;
+    margin-bottom: 22px;
+  }
+  p { color: var(--ink-secondary); }
+  img { max-width: 100%; height: auto; display: block; border-radius: 6px; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 4px; font-size: 0.92rem; }
+  th, td { padding: 8px 10px; text-align: center; border: 1px solid var(--gridline); }
+  th { background: var(--blue); color: #fff; font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--row-alt); }
+  td { color: var(--ink-primary); }
+  .explain { color: var(--ink-secondary); font-size: 0.95rem; margin-top: 14px; }
+  .caption { color: var(--ink-muted); font-size: 0.8rem; margin-top: 6px; }
+  a.button, button.button {
+    display: inline-block;
+    background: var(--blue);
+    color: #fff;
+    border: none;
+    padding: 12px 22px;
+    border-radius: 7px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+  }
+  a.button.secondary, button.button.secondary {
+    background: transparent;
+    color: var(--ink-primary);
+    border: 1px solid var(--baseline);
+  }
+  input[type=text] {
+    width: 100%;
+    padding: 13px 14px;
+    font-size: 1.05rem;
+    border-radius: 7px;
+    border: 1px solid var(--baseline);
+    background: var(--surface);
+    color: var(--ink-primary);
+  }
+  .error {
+    background: rgba(227, 73, 72, 0.12);
+    border: 1px solid #e34948;
+    color: var(--ink-primary);
+    padding: 12px 16px;
+    border-radius: 7px;
+    margin-bottom: 18px;
+  }
+  .meta { color: var(--ink-muted); font-size: 0.85rem; }
+  .actions { display: flex; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
+  .examples { color: var(--ink-muted); font-size: 0.88rem; margin-top: 10px; }
+  hr { border: none; border-top: 1px solid var(--gridline); margin: 30px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  {% block content %}{% endblock %}
+</div>
+</body>
+</html>
