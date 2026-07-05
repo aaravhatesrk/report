@@ -327,16 +327,24 @@ def select_arima(returns, max_p=3, max_q=3):
     AR and MA roots nearly cancel, while BIC favors the simplest model
     consistent with the data - including the "no structure" ARIMA(0,0,0)
     constant-mean model when returns are indistinguishable from white noise."""
+    # cov_type="none" skips the numerical-Hessian standard-error computation
+    # during the search - it's the most memory/CPU-hungry part of each fit and
+    # is thrown away for all but the winning model anyway. This keeps the grid
+    # search from OOM-killing the process on memory-constrained deployments.
     best = None
     for p in range(max_p + 1):
         for q in range(max_q + 1):
             try:
-                fitted = ARIMA(returns, order=(p, 0, q), trend="c").fit()
+                fitted = ARIMA(returns, order=(p, 0, q), trend="c").fit(cov_type="none")
             except Exception:
                 continue
             if best is None or fitted.bic < best[0].bic:
                 best = (fitted, p, q)
-    return best
+    if best is None:
+        return None
+    # Refit the winner with proper standard errors for the report tables.
+    final_fitted = ARIMA(returns, order=(best[1], 0, best[2]), trend="c").fit()
+    return (final_fitted, best[1], best[2])
 
 
 # ------------------------------------------------------------ narrative text --
