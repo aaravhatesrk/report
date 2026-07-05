@@ -7,6 +7,7 @@ used by both the HTML report and the downloadable PDF.
 import base64
 import io
 import re
+import warnings
 from datetime import datetime
 
 import matplotlib
@@ -16,9 +17,16 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 import yfinance as yf
+from arch import arch_model
 from scipy import stats
 from statsmodels.stats.anova import anova_lm
-from statsmodels.stats.diagnostic import het_breuschpagan
+from statsmodels.stats.diagnostic import acorr_ljungbox, het_breuschpagan
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.stattools import acf, adfuller, pacf
+
+warnings.filterwarnings("ignore", category=UserWarning, module="statsmodels")
+warnings.filterwarnings("ignore", category=UserWarning, module="arch")
+warnings.filterwarnings("ignore", category=FutureWarning, module="statsmodels")
 
 # ---- Design system (matches the original R report) -------------------------
 COL_BLUE = "#2a78d6"     # Nifty 50 (categorical slot 1)
@@ -257,6 +265,80 @@ def chart_prediction(scenario_df):
     return fig_to_png_bytes(fig)
 
 
+def chart_acf_pacf(df, company_name, nlags=20):
+    ret = df["Stock_ret"].values
+    acf_vals = acf(ret, nlags=nlags, fft=True)
+    pacf_vals = pacf(ret, nlags=nlags, method="ywm")
+    band = 1.96 / np.sqrt(len(ret))
+    lags = np.arange(nlags + 1)
+
+    fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.8))
+    for ax, vals, color, title in (
+        (axes[0], acf_vals, COL_BLUE, f"{company_name} return: ACF"),
+        (axes[1], pacf_vals, COL_ORANGE, f"{company_name} return: PACF"),
+    ):
+        ax.bar(lags[1:], vals[1:], width=0.35, color=color)
+        ax.axhline(0, color=INK_MUTED, linewidth=0.8)
+        ax.axhline(band, color=BASELINE, linewidth=0.9, linestyle="--")
+        ax.axhline(-band, color=BASELINE, linewidth=0.9, linestyle="--")
+        ax.set_title(title, loc="left", fontsize=10.5, fontweight="bold")
+        ax.set_xlabel("Lag (trading days)")
+    fig.tight_layout()
+    return fig_to_png_bytes(fig)
+
+
+def chart_arima_forecast(df, company_name, forecast_dates, fc_mean, fc_lower, fc_upper):
+    history = df["Stock_ret"].iloc[-60:]
+    fig, ax = plt.subplots(figsize=(9.5, 4.6))
+    ax.axhline(0, color=BASELINE, linewidth=0.8)
+    ax.plot(history.index, history.values, color=COL_BLUE, linewidth=1.1, label="Observed return")
+    ax.plot(forecast_dates, fc_mean, color=COL_ORANGE, linewidth=1.8, label="Forecast")
+    ax.fill_between(forecast_dates, fc_lower, fc_upper, color=COL_ORANGE, alpha=0.15)
+    ax.axvline(history.index[-1], color=INK_MUTED, linewidth=0.8, linestyle=":")
+    ax.set_ylabel(f"{company_name} daily return (%)")
+    ax.legend(frameon=False, loc="upper left")
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    return fig_to_png_bytes(fig)
+
+
+def chart_garch_volatility(df, cond_vol, forecast_dates, forecast_vol, company_name):
+    fig, ax = plt.subplots(figsize=(9.5, 4.6))
+    ax.plot(df.index, cond_vol, color=COL_BLUE, linewidth=1.0, label="Estimated daily volatility (in-sample)")
+    ax.plot(forecast_dates, forecast_vol, color=COL_ORANGE, linewidth=1.8, linestyle="--", label="Forecast volatility")
+    ax.axvline(df.index[-1], color=INK_MUTED, linewidth=0.8, linestyle=":")
+    ax.set_ylabel(f"{company_name} conditional daily volatility (%)")
+    ax.legend(frameon=False, loc="upper left")
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    return fig_to_png_bytes(fig)
+
+
+# --------------------------------------------------- stationarity & forecasting --
+def adf_test(series, regression="c"):
+    stat, pval, usedlag, nobs, _crit, _icbest = adfuller(series.dropna().values, autolag="AIC", regression=regression)
+    return {"stat": stat, "pval": pval, "usedlag": usedlag, "nobs": nobs}
+
+
+def select_arima(returns, max_p=3, max_q=3):
+    """Grid-search ARMA(p,0,q) orders (0..max_p, 0..max_q) and keep the one
+    that minimizes BIC. BIC (rather than AIC) is used deliberately: on noisy
+    daily-return data, AIC tends to pick needlessly complex ARMA models whose
+    AR and MA roots nearly cancel, while BIC favors the simplest model
+    consistent with the data - including the "no structure" ARIMA(0,0,0)
+    constant-mean model when returns are indistinguishable from white noise."""
+    best = None
+    for p in range(max_p + 1):
+        for q in range(max_q + 1):
+            try:
+                fitted = ARIMA(returns, order=(p, 0, q), trend="c").fit()
+            except Exception:
+                continue
+            if best is None or fitted.bic < best[0].bic:
+                best = (fitted, p, q)
+    return best
+
+
 # ------------------------------------------------------------ narrative text --
 def _beta_desc(beta):
     if beta > 1.1:
@@ -302,6 +384,45 @@ def build_report(query: str) -> dict:
 
     corr = df[["Nifty_ret", "Stock_ret"]].corr().iloc[0, 1]
 
+    # ---- Stationarity & autocorrelation ----
+    adf_nifty_level = adf_test(df["Nifty_Close"], regression="ct")
+    adf_stock_level = adf_test(df["Stock_Close"], regression="ct")
+    adf_nifty_ret = adf_test(df["Nifty_ret"], regression="c")
+    adf_stock_ret = adf_test(df["Stock_ret"], regression="c")
+
+    lb_raw = acorr_ljungbox(df["Stock_ret"], lags=[10], return_df=True)
+    lb_stat = lb_raw["lb_stat"].iloc[0]
+    lb_pval = lb_raw["lb_pvalue"].iloc[0]
+
+    # ---- ARIMA return forecast ----
+    horizon = 10
+    arima_model, arima_p, arima_q = select_arima(df["Stock_ret"])
+    arima_fc = arima_model.get_forecast(steps=horizon)
+    arima_mean = np.asarray(arima_fc.predicted_mean)
+    arima_ci = np.asarray(arima_fc.conf_int(alpha=0.05))
+    forecast_dates = pd.bdate_range(df.index[-1] + pd.Timedelta(days=1), periods=horizon)
+
+    last_price = df["Stock_Close"].iloc[-1]
+    implied_price = last_price * np.exp(np.cumsum(arima_mean) / 100)
+
+    lb_arima = acorr_ljungbox(arima_model.resid, lags=[10], return_df=True)
+    lb_arima_stat = lb_arima["lb_stat"].iloc[0]
+    lb_arima_pval = lb_arima["lb_pvalue"].iloc[0]
+
+    # ---- GARCH(1,1) volatility model ----
+    garch_res = arch_model(df["Stock_ret"], mean="Constant", vol="GARCH", p=1, q=1, dist="normal").fit(disp="off")
+    garch_alpha = garch_res.params["alpha[1]"]
+    garch_beta = garch_res.params["beta[1]"]
+    garch_persistence = garch_alpha + garch_beta
+    garch_half_life = (
+        np.log(0.5) / np.log(garch_persistence) if 0 < garch_persistence < 1 else float("nan")
+    )
+    garch_fc = garch_res.forecast(horizon=horizon, reindex=False)
+    garch_fc_vol = np.sqrt(garch_fc.variance.values[-1])
+    garch_unconditional_vol = np.sqrt(
+        garch_res.params["omega"] / (1 - garch_persistence)
+    ) if garch_persistence < 1 else float("nan")
+
     # ---- Charts ----
     images = {
         "prices": chart_prices(df, company_name),
@@ -310,6 +431,13 @@ def build_report(query: str) -> dict:
         "scatter": chart_scatter(df, model_simple, company_name),
         "diagnostics": chart_diagnostics(model_multi),
         "prediction": chart_prediction(pred_frame),
+        "acf_pacf": chart_acf_pacf(df, company_name),
+        "arima_forecast": chart_arima_forecast(
+            df, company_name, forecast_dates, arima_mean, arima_ci[:, 0], arima_ci[:, 1]
+        ),
+        "garch_vol": chart_garch_volatility(
+            df, garch_res.conditional_volatility, forecast_dates, garch_fc_vol, company_name
+        ),
     }
 
     # ---- Tables ----
@@ -363,6 +491,82 @@ def build_report(query: str) -> dict:
             "95% CI upper": fmt(row["mean_ci_upper"]),
         })
 
+    def adf_row(label, res):
+        stationary = res["pval"] < 0.05
+        return {
+            "Series": label,
+            "ADF statistic": fmt(res["stat"], 3),
+            "p value": fmt_p(res["pval"]),
+            "Lags used": str(res["usedlag"]),
+            "Conclusion": "Stationary (rejects unit root)" if stationary else "Non-stationary (unit root present)",
+        }
+
+    stationarity_tbl = [
+        adf_row("Nifty 50 price level", adf_nifty_level),
+        adf_row(f"{company_name} price level", adf_stock_level),
+        adf_row("Nifty 50 daily return", adf_nifty_ret),
+        adf_row(f"{company_name} daily return", adf_stock_ret),
+    ]
+
+    autocorr_tbl = [{
+        "Test": "Ljung-Box, 10 lags (raw returns)",
+        "Statistic": fmt(lb_stat, 3),
+        "p value": fmt_p(lb_pval),
+        "Conclusion": "Significant autocorrelation detected" if lb_pval < 0.05 else "No significant autocorrelation detected",
+    }]
+
+    arima_coef_tbl = []
+    for term in arima_model.params.index:
+        if term == "sigma2":
+            continue
+        arima_coef_tbl.append({
+            "Term": term,
+            "Estimate": fmt(arima_model.params[term]),
+            "Std. Error": fmt(arima_model.bse[term]),
+            "t value": fmt(arima_model.tvalues[term], 2),
+            "p value": fmt_p(arima_model.pvalues[term]),
+        })
+
+    arima_forecast_tbl = []
+    for i in range(horizon):
+        arima_forecast_tbl.append({
+            "Date": f"{forecast_dates[i]:%d %b %Y}",
+            "Forecast return (%)": fmt(arima_mean[i]),
+            "95% CI lower": fmt(arima_ci[i, 0]),
+            "95% CI upper": fmt(arima_ci[i, 1]),
+            "Implied price (Rs.)": fmt(implied_price[i], 2),
+        })
+
+    arima_diag_tbl = [{
+        "Test": "Ljung-Box, 10 lags (ARIMA residuals)",
+        "Statistic": fmt(lb_arima_stat, 3),
+        "p value": fmt_p(lb_arima_pval),
+        "Conclusion": "Residual autocorrelation remains" if lb_arima_pval < 0.05 else "No residual autocorrelation - model is adequate",
+    }]
+
+    garch_coef_tbl = []
+    for term in garch_res.params.index:
+        garch_coef_tbl.append({
+            "Term": term,
+            "Estimate": fmt(garch_res.params[term], 4),
+            "Std. Error": fmt(garch_res.std_err[term], 4),
+            "p value": fmt_p(garch_res.pvalues[term]),
+        })
+    garch_coef_tbl.append({
+        "Term": "alpha + beta (persistence)",
+        "Estimate": fmt(garch_persistence, 4),
+        "Std. Error": "-",
+        "p value": "-",
+    })
+
+    garch_forecast_tbl = []
+    for i in range(horizon):
+        garch_forecast_tbl.append({
+            "Date": f"{forecast_dates[i]:%d %b %Y}",
+            "Forecast daily volatility (%)": fmt(garch_fc_vol[i]),
+            "Annualized volatility (%)": fmt(garch_fc_vol[i] * np.sqrt(252), 1),
+        })
+
     meta_tbl = [
         {"Field": "Dependent series", "Value": f"{company_name} ({ticker}) daily log return, %"},
         {"Field": "Independent series", "Value": "Nifty 50 (^NSEI) daily log return, %"},
@@ -378,11 +582,13 @@ def build_report(query: str) -> dict:
     text["intro"] = (
         f"This report estimates the market beta of {company_name} ({ticker}) against the Nifty 50 "
         f"benchmark index using {n_obs:,} trading days of daily price data spanning "
-        f"{date_range[0]:%d %b %Y} to {date_range[1]:%d %b %Y}. The analysis follows the standard "
-        "econometric workflow for a market-model regression: exploratory analysis of returns, a simple "
-        "OLS regression of the company's return on the market's return, an extended specification that "
-        "adds yesterday's market return, hypothesis tests on the estimated beta, residual diagnostics, "
-        "and heteroskedasticity-robust inference."
+        f"{date_range[0]:%d %b %Y} to {date_range[1]:%d %b %Y}. The analysis combines a cross-sectional "
+        "market-model regression with a dedicated time-series toolkit: exploratory analysis of returns, a "
+        "simple OLS regression of the company's return on the market's return, an extended specification "
+        "that adds yesterday's market return, hypothesis tests on the estimated beta, residual diagnostics, "
+        "and heteroskedasticity-robust inference, followed by unit-root and autocorrelation tests, an "
+        "ARIMA model of the return series with a forecast for the next 10 trading days, and a GARCH(1,1) "
+        "model of the stock's time-varying volatility."
     )
 
     text["prices"] = (
@@ -495,6 +701,110 @@ def build_report(query: str) -> dict:
         "outcomes an investor might observe."
     )
 
+    text["stationarity"] = (
+        "ARIMA and GARCH models assume the series being modeled is stationary - its mean and variance don't "
+        "systematically drift over time. The table above reports Augmented Dickey-Fuller (ADF) tests, which "
+        "test the null hypothesis that a series contains a unit root (is non-stationary). As is typical for "
+        f"equity prices, both the Nifty 50 and {company_name}'s price level fail to reject the unit-root null "
+        f"(p = {fmt_p(adf_nifty_level['pval'])} and p = {fmt_p(adf_stock_level['pval'])} respectively): prices "
+        "wander over time with no fixed level to revert to, which is exactly why analysts model returns "
+        f"rather than price levels. Daily log returns for both series comfortably reject the unit-root null "
+        f"(p = {fmt_p(adf_nifty_ret['pval'])} and p = {fmt_p(adf_stock_ret['pval'])}), confirming returns are "
+        "stationary and therefore valid inputs for the ARIMA and GARCH models that follow."
+    )
+
+    lb_significant = lb_pval < 0.05
+    text["autocorr"] = (
+        f"The autocorrelation function (ACF) and partial autocorrelation function (PACF) above show how "
+        f"strongly {company_name}'s return on a given day is correlated with its own return 1 to 20 trading "
+        "days earlier. Bars crossing the dashed bands are statistically distinguishable from zero at the 5% "
+        f"level. A Ljung-Box test formally checks whether the first 10 lags are jointly significant: "
+        f"Q = {fmt(lb_stat, 3)}, p = {fmt_p(lb_pval)}. "
+        + (
+            "Significant autocorrelation is present, meaning some of the stock's own recent return history "
+            "helps explain its next move - the ARIMA model below is fit to capture that structure."
+            if lb_significant else
+            "No significant autocorrelation is detected, meaning the stock's own recent return history carries "
+            "little information about its next move on its own - a first hint that little short-horizon "
+            "structure remains for the ARIMA model below to find."
+        )
+    )
+
+    arima_is_whitenoise = (arima_p == 0 and arima_q == 0)
+    arima_order_str = f"ARIMA({arima_p}, 0, {arima_q})"
+    text["arima"] = (
+        "An ARIMA(p, d, q) model forecasts a series from its own past values (the AR terms) and past forecast "
+        "errors (the MA terms); d = 0 here because the return series is already stationary, as shown above. "
+        "Every combination of p and q from 0 to 3 was fit and compared using the Bayesian Information "
+        "Criterion (BIC), which penalizes unnecessary complexity more heavily than the more common AIC and "
+        "so avoids fitting noise - a real risk with daily returns, where AIC often selects AR/MA terms whose "
+        f"roots nearly cancel out. The winning specification is {arima_order_str}. "
+        + (
+            f"This is the model with no AR or MA terms at all - just a constant mean. In plain terms, this is "
+            f"direct evidence that {company_name}'s daily returns are statistically indistinguishable from "
+            "white noise: past returns contain no statistically useful information for forecasting tomorrow's "
+            "return, consistent with the weak form of market efficiency."
+            if arima_is_whitenoise else
+            f"Its coefficients are reported in the table above. A Ljung-Box test on the model's residuals "
+            f"(Q = {fmt(lb_arima_stat, 3)}, p = {fmt_p(lb_arima_pval)}) checks whether any autocorrelation "
+            "remains unexplained - "
+            + (
+                "some does, meaning even the selected model does not fully capture the return dynamics."
+                if lb_arima_pval < 0.05 else
+                "none remains, indicating the model adequately captures the autocorrelation structure in the data."
+            )
+        )
+    )
+
+    text["arima_forecast"] = (
+        f"The table and chart project {company_name}'s daily return for the next {horizon} trading days, "
+        f"together with an implied price path compounded forward from the last observed close of "
+        f"Rs. {fmt(last_price, 2)}. "
+        + (
+            f"Because the selected model contains no predictive structure, the point forecast sits at the "
+            f"sample's constant mean return ({fmt(arima_model.params['const'])}% per day) for every horizon, "
+            "and the 95% confidence band stays wide and roughly constant from day one - an honest reflection "
+            "of the fact that short-horizon returns are not meaningfully predictable from their own history "
+            "alone. The implied price path is therefore a near-random walk around the last observed price, "
+            "not a directional prediction."
+            if arima_is_whitenoise else
+            "The point forecast reflects the fitted AR/MA dynamics and converges toward the model's long-run "
+            "mean return as the horizon extends, while the 95% confidence band widens with each additional "
+            "day, reflecting compounding forecast uncertainty. As with any short-horizon return forecast, "
+            "the band is wide relative to the point estimate - a reminder that day-to-day direction remains "
+            "hard to call even when weak statistical structure is present."
+        )
+    )
+
+    garch_persistent = 0 < garch_persistence < 1
+    text["garch"] = (
+        "The Breusch-Pagan test earlier flagged heteroskedasticity in the regression residuals - error "
+        "variance that changes over time. A GARCH(1,1) model characterizes that time-varying volatility "
+        "directly, rather than only correcting standard errors around it. It models today's variance as a "
+        "weighted combination of a long-run average, yesterday's squared surprise "
+        f"(the ARCH term, alpha = {fmt(garch_alpha, 3)}), and yesterday's variance (the GARCH term, "
+        f"beta = {fmt(garch_beta, 3)}). Their sum, alpha + beta = {fmt(garch_persistence, 3)}, measures "
+        "volatility persistence - how long a shock to volatility takes to fade. "
+        + (
+            f"With persistence below 1, a shock here has an estimated half-life of about "
+            f"{garch_half_life:.1f} trading days before decaying halfway back to its long-run average of "
+            f"roughly {fmt(garch_unconditional_vol, 2)}% daily volatility."
+            if garch_persistent else
+            "Persistence is at or above 1, indicating volatility shocks decay very slowly, or not at all, in "
+            "this sample - a near-integrated GARCH process where turbulent periods can persist for a long time."
+        )
+        + " The chart shows the model's estimated daily volatility across the full sample - the visible "
+        "clustering of calm and turbulent stretches is exactly the pattern the earlier Breusch-Pagan test was "
+        f"picking up - together with a {horizon}-day forecast that "
+        + (
+            "reverts toward the long-run average as the horizon extends, the hallmark of a mean-reverting "
+            "volatility process."
+            if garch_persistent else
+            "stays close to its current level across the forecast window, reflecting the slow-decaying "
+            "persistence estimated above."
+        )
+    )
+
     text["conclusion"] = (
         f"{company_name}'s estimated market beta is {fmt(beta_hat, 2)}, meaning the stock has historically "
         f"{_beta_desc(beta_hat)}. The hypothesis that beta equals 1 is "
@@ -504,7 +814,22 @@ def build_report(query: str) -> dict:
         f"sample. {'Heteroskedasticity was detected, so the robust standard errors above should be used for inference.' if het_present else 'No significant heteroskedasticity was detected, though robust standard errors were reported as routine practice.'} "
         f"Overall, the market model explains {fmt(model_simple.rsquared * 100, 1)}% of the day-to-day "
         f"variation in {company_name}'s returns (R-squared), leaving the majority of its daily moves "
-        "attributable to company-specific rather than market-wide factors."
+        "attributable to company-specific rather than market-wide factors. "
+        + (
+            f"On the time-series side, returns are stationary while price levels are not, {company_name}'s "
+            f"own return history shows {'some' if lb_significant else 'little'} exploitable autocorrelation, "
+            f"and the BIC-selected {arima_order_str} model "
+            + (
+                "found no predictable structure at all - reinforcing that short-horizon return direction is "
+                "very difficult to forecast from price history alone."
+                if arima_is_whitenoise else
+                "captures what limited structure exists, though its forecasts still carry wide confidence bands."
+            )
+            + f" The GARCH(1,1) model, by contrast, does find clear structure in volatility (persistence = "
+            f"{fmt(garch_persistence, 2)}): calm and turbulent periods cluster and are therefore somewhat "
+            "forecastable, even though the direction of returns within them is not - a distinction worth "
+            "keeping in mind when using this report for risk management rather than return prediction."
+        )
     )
 
     return {
@@ -522,6 +847,13 @@ def build_report(query: str) -> dict:
             "robust": robust_tbl,
             "compare": compare_tbl,
             "prediction": pred_tbl,
+            "stationarity": stationarity_tbl,
+            "autocorr": autocorr_tbl,
+            "arima_coef": arima_coef_tbl,
+            "arima_forecast": arima_forecast_tbl,
+            "arima_diag": arima_diag_tbl,
+            "garch_coef": garch_coef_tbl,
+            "garch_forecast": garch_forecast_tbl,
         },
         "text": text,
         "stats_raw": {
@@ -533,5 +865,7 @@ def build_report(query: str) -> dict:
             "f_pval": f_pval,
             "bp_stat": bp_stat,
             "bp_pval": bp_pval,
+            "arima_order": (arima_p, 0, arima_q),
+            "garch_persistence": garch_persistence,
         },
     }

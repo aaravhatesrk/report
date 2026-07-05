@@ -7,3 +7,4 @@ statsmodels
 yfinance
 scipy
 reportlab
+arch

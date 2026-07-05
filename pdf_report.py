@@ -148,6 +148,53 @@ def build_pdf(report: dict) -> bytes:
     story.append(Paragraph(t["prediction"], body_style))
     story.append(PageBreak())
 
+    # ---- Stationarity & autocorrelation ----
+    story.append(Paragraph("Stationarity and Autocorrelation", h2_style))
+    story.append(Paragraph("Augmented Dickey-Fuller Unit Root Tests", ParagraphStyle("l3", parent=body_style, fontName="Helvetica-Bold", textColor=INK_PRIMARY)))
+    story.append(_table(report["tables"]["stationarity"]))
+    story.append(Spacer(1, 10))
+    story.append(Paragraph(t["stationarity"], body_style))
+    story.append(PageBreak())
+
+    story.append(Paragraph("Return Autocorrelation: ACF and PACF", h2_style))
+    story.append(_image(report["images"]["acf_pacf"], max_height=3.6 * inch))
+    story.append(Spacer(1, 6))
+    story.append(_table(report["tables"]["autocorr"]))
+    story.append(Spacer(1, 10))
+    story.append(Paragraph(t["autocorr"], body_style))
+    story.append(PageBreak())
+
+    # ---- ARIMA ----
+    story.append(Paragraph("ARIMA Return Forecasting", h2_style))
+    story.append(Paragraph(t["arima"], body_style))
+    story.append(Spacer(1, 8))
+    if report["tables"]["arima_coef"]:
+        story.append(Paragraph("Fitted model coefficients", ParagraphStyle("l4", parent=body_style, fontName="Helvetica-Bold", textColor=INK_PRIMARY)))
+        story.append(_table(report["tables"]["arima_coef"]))
+        story.append(Spacer(1, 8))
+    story.append(_table(report["tables"]["arima_diag"]))
+    story.append(PageBreak())
+
+    horizon = len(report["tables"]["arima_forecast"])
+    story.append(Paragraph(f"{horizon}-Day Return Forecast", h2_style))
+    story.append(_image(report["images"]["arima_forecast"], max_height=3.1 * inch))
+    story.append(Spacer(1, 8))
+    story.append(_table(report["tables"]["arima_forecast"]))
+    story.append(Spacer(1, 10))
+    story.append(Paragraph(t["arima_forecast"], body_style))
+    story.append(PageBreak())
+
+    # ---- GARCH ----
+    story.append(Paragraph("GARCH(1,1) Volatility Modeling and Forecast", h2_style))
+    story.append(_image(report["images"]["garch_vol"], max_height=3.1 * inch))
+    story.append(Spacer(1, 8))
+    story.append(_table(report["tables"]["garch_coef"]))
+    story.append(Spacer(1, 8))
+    story.append(_table(report["tables"]["garch_forecast"]))
+    story.append(Spacer(1, 10))
+    story.append(Paragraph(t["garch"], body_style))
+    story.append(PageBreak())
+
     # ---- Conclusion ----
     story.append(Paragraph("Conclusion", h2_style))
     story.append(Paragraph(t["conclusion"], body_style))

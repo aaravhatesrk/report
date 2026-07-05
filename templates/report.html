@@ -87,6 +87,36 @@
   </div>
 
   <div class="card">
+    <h2>Stationarity and Autocorrelation</h2>
+    {{ render_table(r.tables.stationarity) }}
+    <img src="{{ images.acf_pacf }}" alt="ACF and PACF of returns" style="margin-top:16px;">
+    {{ render_table(r.tables.autocorr) }}
+    <p class="explain">{{ r.text.stationarity }}</p>
+    <p class="explain">{{ r.text.autocorr }}</p>
+  </div>
+
+  <div class="card">
+    <h2>ARIMA Return Forecasting</h2>
+    <p>{{ r.text.arima }}</p>
+    {% if r.tables.arima_coef %}
+    <p style="color:var(--ink-primary); font-weight:600; margin-bottom:2px;">Fitted model coefficients</p>
+    {{ render_table(r.tables.arima_coef) }}
+    {% endif %}
+    {{ render_table(r.tables.arima_diag) }}
+    <img src="{{ images.arima_forecast }}" alt="ARIMA return forecast chart" style="margin-top:16px;">
+    {{ render_table(r.tables.arima_forecast) }}
+    <p class="explain">{{ r.text.arima_forecast }}</p>
+  </div>
+
+  <div class="card">
+    <h2>GARCH(1,1) Volatility Modeling and Forecast</h2>
+    <img src="{{ images.garch_vol }}" alt="GARCH conditional volatility chart">
+    {{ render_table(r.tables.garch_coef) }}
+    {{ render_table(r.tables.garch_forecast) }}
+    <p class="explain">{{ r.text.garch }}</p>
+  </div>
+
+  <div class="card">
     <h2>Conclusion</h2>
     <p>{{ r.text.conclusion }}</p>
   </div>
